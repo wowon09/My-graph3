@@ -22,31 +22,31 @@ def load_and_process_data():
     df["연도"] = df["날짜"].dt.year
     df["평균기온"] = pd.to_numeric(df["평균기온"], errors="coerce")
 
-    # 관측일 수가 300일 이상이고 2025년 이하 데이터만 필터링
-    valid_years = []
-    for year, group in df.groupby("연도"):
-        if year <= 2025 and group["평균기온"].dropna().count() >= 300:
-            valid_years.append(year)
+    # 연도별 관측일수(count) 및 평균기온(mean) 집계
+    all_years = (
+        df.groupby("연도")["평균기온"]
+        .agg(count="count", mean="mean")
+        .reset_index()
+    )
+    all_years = all_years[all_years["연도"] <= 2025]
 
-    df_filtered = df[df["연도"].isin(valid_years)]
-
-    # 연도별 평균기온 계산
-    annual_df = df_filtered.groupby("연도")["평균기온"].mean().reset_index()
-
-    # 1908년부터 지난 연수 (독립변수 X)
-    annual_df["경과연수"] = annual_df["연도"] - 1908
-
-    return annual_df
+    return df, all_years
 
 
 try:
-    df_annual = load_and_process_data()
+    df_raw, all_years = load_and_process_data()
+
+    # 관측일 수가 300일 이상인 해만 추출하여 연평균 데이터프레임 생성
+    df_annual = all_years[all_years["count"] >= 300].rename(
+        columns={"mean": "평균기온"}
+    )
+    df_annual["경과연수"] = df_annual["연도"] - 1908
 
     start_year = int(df_annual["연도"].min())
     end_year = int(df_annual["연도"].max())
     total_count = len(df_annual)
 
-    # 2. 선형 회귀 파라미터 계산 (최소제곱법)
+    # 2. 선형 회귀 파라미터 계산 (최소제곱법 - 순수 파라미터 계산)
     X = df_annual["경과연수"]
     Y = df_annual["평균기온"]
 
@@ -85,7 +85,6 @@ try:
     passed_years = target_year - 1908
     predicted_temp = slope * passed_years + intercept
 
-    # 예측 결과 크게 표시 (Streamlit 순수 metric 카드 사용)
     st.metric(
         label=f"{target_year}년 서울 예상 평균기온 (1908년 기준 경과연수: {passed_years}년)",
         value=f"{predicted_temp:.2f} °C",
@@ -101,5 +100,87 @@ try:
 
     st.line_chart(chart_data)
 
-except Exception as e:
-    st.error(f"오류가 발생했습니다: {e}")
+    st.divider()
+
+    # =========================================================
+    # 도전 — 직선 대신 곡선을 쓰면 (numpy 완전 제거 버전)
+    # =========================================================
+    st.subheader("도전 — 직선 대신 곡선을 쓰면")
+
+    연평균 = all_years[all_years["count"] >= 300].rename(
+        columns={"mean": "기온"}
+    )  # 앞에서 만든 연평균 표
+    학습 = 연평균[연평균["연도"] < 2005]  # 2005년 이전은 훈련용
+    평가 = 연평균[연평균["연도"] >= 2005]  # 그 뒤는 한 번도 안 본 테스트용
+    x = (
+        lambda y: (y - 1950) / 100
+    )  # 연도를 작은 수로 바꿔야 고차 곡선이 안정된다
+
+
+    # numpy 대신 순수 파이썬 다항식 피팅(최소제곱법 및 가우스 소거법) 함수
+    def fit_poly(x_list, y_list, degree):
+        n_dim = degree + 1
+        # 정규 방정식 (Normal Equation) 행렬 생성
+        M = [
+            [
+                sum(xv ** (2 * degree - i - j) for xv in x_list)
+                for j in range(n_dim)
+            ]
+            for i in range(n_dim)
+        ]
+        V = [
+            sum((xv ** (degree - i)) * yv for xv, yv in zip(x_list, y_list))
+            for i in range(n_dim)
+        ]
+
+        # 가우스 소거법 (Gaussian Elimination)
+        for i in range(n_dim):
+            max_row = max(range(i, n_dim), key=lambda r: abs(M[r][i]))
+            M[i], M[max_row] = M[max_row], M[i]
+            V[i], V[max_row] = V[max_row], V[i]
+
+            pivot = M[i][i]
+            for j in range(i, n_dim):
+                M[i][j] /= pivot
+            V[i] /= pivot
+
+            for k in range(n_dim):
+                if k != i:
+                    factor = M[k][i]
+                    for j in range(i, n_dim):
+                        M[k][j] -= factor * M[i][j]
+                    V[k] -= factor * V[i]
+        return V
+
+
+    # 다항식 계산 함수
+    def eval_poly(coeffs, x_val):
+        res = 0
+        for coeff in coeffs:
+            res = res * x_val + coeff
+        return res
+
+
+    x_train = [x(y) for y in 학습["연도"]]
+    y_train = list(학습["기온"])
+    x_test = [x(y) for y in 평가["연도"]]
+    y_test = list(평가["기온"])
+
+    rows = []
+    for 차수 in [1, 3, 9]:
+        계수 = fit_poly(x_train, y_train, 차수)
+
+        # 평가 데이터 예측 오차(MAE) 계산
+        preds = [eval_poly(계수, xv) for xv in x_test]
+        평가오차 = sum(abs(p - yt) for p, yt in zip(preds, y_test)) / len(
+            y_test
+        )
+
+        # 2050년 예측값 계산
+        pred_2050 = eval_poly(계수, x(2050))
+
+        rows.append(
+            {
+                "곡선": f"{차수}차",
+                "테스트 오차(℃)": round(평가오차, 2),
+                "2050년 예측(
