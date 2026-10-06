@@ -1,4 +1,3 @@
-
 import pandas as pd
 import streamlit as st
 
@@ -17,52 +16,105 @@ DATA_URL = "https://raw.githubusercontent.com/greatsong/modudata/bb860932644270a
 @st.cache_data
 def load_and_process_data():
     df = pd.read_csv(DATA_URL, encoding="utf-8")
-
-    # 날짜 처리 및 평균기온 숫자 변환
     df["날짜"] = pd.to_datetime(df["날짜"])
     df["연도"] = df["날짜"].dt.year
     df["평균기온"] = pd.to_numeric(df["평균기온"], errors="coerce")
 
-    # 연도별 관측일수(count) 및 평균기온(mean) 집계
     all_years = (
         df.groupby("연도")["평균기온"]
         .agg(count="count", mean="mean")
         .reset_index()
     )
     all_years = all_years[all_years["연도"] <= 2025]
-
     return df, all_years
 
 
-try:
-    df_raw, all_years = load_and_process_data()
+df_raw, all_years = load_and_process_data()
 
-    # 관측일 수가 300일 이상인 해만 추출
-    df_annual = all_years[all_years["count"] >= 300].rename(
-        columns={"mean": "평균기온"}
-    )
-    df_annual["경과연수"] = df_annual["연도"] - 1908
+# 관측일 수가 300일 이상인 해만 추출
+df_annual = all_years[all_years["count"] >= 300].rename(
+    columns={"mean": "평균기온"}
+)
+df_annual["경과연수"] = df_annual["연도"] - 1908
 
-    start_year = int(df_annual["연도"].min())
-    end_year = int(df_annual["연도"].max())
-    total_count = len(df_annual)
+start_year = int(df_annual["연도"].min())
+end_year = int(df_annual["연도"].max())
+total_count = len(df_annual)
 
-    # 2. 선형 회귀 파라미터 계산 (최소제곱법)
-    X = df_annual["경과연수"]
-    Y = df_annual["평균기온"]
+# 2. 선형 회귀 파라미터 계산 (최소제곱법)
+X = df_annual["경과연수"]
+Y = df_annual["평균기온"]
 
-    n = len(X)
-    sum_x = X.sum()
-    sum_y = Y.sum()
-    sum_x2 = (X**2).sum()
-    sum_xy = (X * Y).sum()
+n = len(X)
+sum_x = X.sum()
+sum_y = Y.sum()
+sum_x2 = (X**2).sum()
+sum_xy = (X * Y).sum()
 
-    slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - (sum_x**2))
-    intercept = (sum_y - slope * sum_x) / n
+slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - (sum_x**2))
+intercept = (sum_y - slope * sum_x) / n
 
-    df_annual["회귀선"] = slope * df_annual["경과연수"] + intercept
+df_annual["회귀선"] = slope * df_annual["경과연수"] + intercept
+corr = df_annual["경과연수"].corr(df_annual["평균기온"])
 
-    # 상관계수 계산
-    corr = df_annual["경과연수"].corr(df_annual["평균기온"])
+# 3. 데이터 요약 출력
+col1, col2, col3 = st.columns(3)
+col1.metric("학습 데이터 연도 수", f"{total_count}개 해")
+col2.metric("시작 연도 ~ 끝 연도", f"{start_year}년 ~ {end_year}년")
+col3.metric("연수-기온 상관계수", f"{corr:.4f}")
 
-    # 3. 데이터 요약 출력
+st.divider()
+
+# 4. 연도 선택 슬라이더 및 기온 예측
+st.subheader("🔮 예상 기온 예측하기")
+target_year = st.slider(
+    "예측하고 싶은 연도를 선택하세요",
+    min_value=1900,
+    max_value=2100,
+    value=2025,
+    step=1,
+)
+
+passed_years = target_year - 1908
+predicted_temp = slope * passed_years + intercept
+
+st.metric(
+    label=f"{target_year}년 서울 예상 평균기온 (1908년 기준 경과연수: {passed_years}년)",
+    value=f"{predicted_temp:.2f} °C",
+)
+
+st.divider()
+
+# 5. 차트 시각화
+st.subheader("📈 서울 연평균기온 및 회귀 직선")
+chart_data = df_annual.set_index("연도")[["평균기온", "회귀선"]]
+chart_data.columns = ["실제 관측 기온(°C)", "회귀 직선(°C)"]
+st.line_chart(chart_data)
+
+st.divider()
+
+# 6. 도전 — 직선 대신 곡선을 쓰면 (numpy 없이 구현)
+st.subheader("도전 — 직선 대신 곡선을 쓰면")
+
+연평균 = all_years[all_years["count"] >= 300].rename(columns={"mean": "기온"})
+학습 = 연평균[연평균["연도"] < 2005]
+평가 = 연평균[연평균["연도"] >= 2005]
+
+
+def scale_year(y):
+    return (y - 1950) / 100
+
+
+def fit_poly(x_list, y_list, degree):
+    n_dim = degree + 1
+    M = [
+        [sum(xv ** (2 * degree - i - j) for xv in x_list) for j in range(n_dim)]
+        for i in range(n_dim)
+    ]
+    V = [
+        sum((xv ** (degree - i)) * yv for xv, yv in zip(x_list, y_list))
+        for i in range(n_dim)
+    ]
+
+    for i in range(n_dim):
+        max_row = max(range(i,
