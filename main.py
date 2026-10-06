@@ -90,31 +90,3 @@ st.subheader("📈 서울 연평균기온 및 회귀 직선")
 chart_data = df_annual.set_index("연도")[["평균기온", "회귀선"]]
 chart_data.columns = ["실제 관측 기온(°C)", "회귀 직선(°C)"]
 st.line_chart(chart_data)
-
-st.divider()
-
-# 6. 도전 — 직선 대신 곡선을 쓰면 (numpy 없이 구현)
-st.subheader("도전 — 직선 대신 곡선을 쓰면")
-
-연평균 = all_years[all_years["count"] >= 300].rename(columns={"mean": "기온"})
-학습 = 연평균[연평균["연도"] < 2005]
-평가 = 연평균[연평균["연도"] >= 2005]
-
-
-def scale_year(y):
-    return (y - 1950) / 100
-
-
-def fit_poly(x_list, y_list, degree):
-    n_dim = degree + 1
-    M = [
-        [sum(xv ** (2 * degree - i - j) for xv in x_list) for j in range(n_dim)]
-        for i in range(n_dim)
-    ]
-    V = [
-        sum((xv ** (degree - i)) * yv for xv, yv in zip(x_list, y_list))
-        for i in range(n_dim)
-    ]
-
-    for i in range(n_dim):
-        max_row = max(range(i,
